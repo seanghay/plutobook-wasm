@@ -48,12 +48,15 @@ Output: `subprojects/icu/source/data/in/icudt78l-min.dat`
 meson setup builddir-wasm \
   --cross-file cross/emscripten.ini \
   --native-file cross/native.ini \
+  --buildtype=release \
   --default-library=static \
   -Dcurl=disabled \
   -Dturbojpeg=disabled \
   -Dwebp=disabled \
   -Dtools=disabled
 ```
+
+`--buildtype=release` enables `-O3`, LTO, `-Oz` (wasm size optimisation), and Closure Compiler on the JS glue. Omit it (or use `--buildtype=debugoptimized`) for faster iteration builds.
 
 ### 3. Build
 
@@ -68,10 +71,11 @@ mkdir -p dist
 cp builddir-wasm/wasm/plutobook.{js,wasm} dist/
 ```
 
-Or use the provided script which runs steps 2–4 in one go:
+Or use the provided script which runs steps 2–4 in one go (defaults to release mode):
 
 ```bash
-bash wasm/build.sh
+bash wasm/build.sh          # release (optimised)
+bash wasm/build.sh --debug  # faster compile, larger output
 ```
 
 ---

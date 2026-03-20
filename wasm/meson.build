@@ -26,8 +26,17 @@ wasm_link_args = [
     '--embed-file', meson.source_root() / 'subprojects/icu/source/data/in/icudt78l-min.dat@/icudata/icudt78l.dat',
 ]
 
+# Release-only: size optimisation + closure compiler for the JS glue.
+if get_option('buildtype') == 'release'
+    wasm_link_args += [
+        '-Oz',
+        '--closure', '1',
+    ]
+endif
+
 executable('plutobook',
     'plutobook_wasm.c',
     dependencies: [plutobook_dep],
     link_args: wasm_link_args,
+    override_options: ['b_lto=' + (get_option('buildtype') == 'release' ? 'true' : 'false')],
 )

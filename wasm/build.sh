@@ -7,7 +7,8 @@
 #   - Meson and Ninja installed.
 #
 # Usage:
-#   ./wasm/build.sh [--release]
+#   ./wasm/build.sh          # release build (default: -Oz, LTO, closure)
+#   ./wasm/build.sh --debug  # debug build (faster compile, larger output)
 #
 # Output: dist/plutobook.js  dist/plutobook.wasm
 
@@ -17,12 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/builddir-wasm"
 DIST_DIR="${PROJECT_ROOT}/dist"
-BUILD_TYPE="debugoptimized"
+BUILD_TYPE="release"
 
 # Parse arguments.
 for arg in "$@"; do
   case "$arg" in
-    --release) BUILD_TYPE="release" ;;
+    --debug) BUILD_TYPE="debugoptimized" ;;
   esac
 done
 
@@ -68,8 +69,8 @@ meson compile -C "${BUILD_DIR}"
 
 # Copy artefacts.
 mkdir -p "${DIST_DIR}"
-cp "${BUILD_DIR}/plutobook.js"   "${DIST_DIR}/"
-cp "${BUILD_DIR}/plutobook.wasm" "${DIST_DIR}/"
+cp "${BUILD_DIR}/wasm/plutobook.js"   "${DIST_DIR}/"
+cp "${BUILD_DIR}/wasm/plutobook.wasm" "${DIST_DIR}/"
 
 echo ""
 echo "Build complete."
