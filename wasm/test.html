@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PlutoBook WASM Test</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; padding: 0 1em; }
+    button { padding: .5em 1em; font-size: 1em; cursor: pointer; }
+    #status { margin: 1em 0; color: #555; }
+    #output { width: 100%; height: 600px; border: 1px solid #ccc; display: none; }
+    textarea { width: 100%; height: 120px; font-family: monospace; font-size: .9em; }
+  </style>
+</head>
+<body>
+  <h1>PlutoBook WASM Test</h1>
+
+  <p>HTML input:</p>
+  <textarea id="html-input">&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;style&gt;
+    body { font-family: sans-serif; margin: 2em; }
+    h1 { color: #336699; }
+    p { line-height: 1.6; }
+  &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Hello from PlutoBook!&lt;/h1&gt;
+  &lt;p&gt;This PDF was generated entirely in the browser using WebAssembly.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;</textarea>
+
+  <br>
+  <button id="render-btn">Render to PDF</button>
+  <div id="status">Load the page and click Render.</div>
+  <iframe id="output" title="PDF Output"></iframe>
+
+  <!--
+    Load the Emscripten-generated plutobook.js FIRST (it defines the global PlutoBook factory),
+    then load this test page's inline module which calls createPlutoBook().
+    Adjust the src path to wherever you placed the dist/ artefacts.
+  -->
+  <script src="../dist/plutobook.js"></script>
+  <script type="module">
+    import { createPlutoBook, PageSize, Margins } from './plutobook.js';
+
+    const statusEl = document.getElementById('status');
+    const outputEl = document.getElementById('output');
+    const btn      = document.getElementById('render-btn');
+    const htmlIn   = document.getElementById('html-input');
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      statusEl.textContent = 'Initialising PlutoBook…';
+
+      try {
+        const pb = await createPlutoBook({
+          wasmUrl: '../dist/plutobook.wasm',
+        });
+
+        statusEl.textContent = 'Rendering…';
+        const html = htmlIn.value
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&');
+
+        const pdfBytes = pb.htmlToPdf(html, {
+          pageSize: PageSize.A4,
+          margins:  Margins.Normal,
+        });
+
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const url  = URL.createObjectURL(blob);
+        outputEl.src     = url;
+        outputEl.style.display = 'block';
+        statusEl.textContent = `Done — ${pdfBytes.byteLength} bytes.`;
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+        console.error(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -5,6 +5,13 @@ project('plutobook', 'cpp', 'c',
     default_options: ['cpp_std=c++20']
 )
 
+cpp = meson.get_compiler('cpp')
+
+# When cross-compiling for WebAssembly with Emscripten, override dependency
+# resolution to use the Emscripten built-in ports for FreeType, HarfBuzz,
+# zlib, and libpng, and disable optional deps that don't build for WASM.
+is_emscripten = cpp.get_id() == 'emscripten'
+
 expat_dep = dependency('expat',
     required: true,
     version: '>=2.1.0',
@@ -15,14 +22,22 @@ icu_required_version = '>=57.0'
 icuuc_dep = dependency('icu-uc',
     required: true,
     version: icu_required_version,
+    default_options: ['cpp_std=c++17'],
     fallback: ['icu', 'icuuc_dep']
 )
 
 icui18n_dep = dependency('icu-i18n',
     required: true,
     version: icu_required_version,
+    default_options: ['cpp_std=c++17'],
     fallback: ['icu', 'icui18n_dep']
 )
+
+# When the ICU subproject is used (cross-build / wrap fallback), icuuc links
+# with the stub data library by default.  The real ICU data is a separate
+# library exposed as 'icu-data'; pull it in explicitly so the full dataset
+# (break iterators, locale data, etc.) is available at runtime.
+icudata_dep = dependency('icu-data', required: false)
 
 freetype_dep = dependency('freetype2',
     required: true,
@@ -93,6 +108,10 @@ plutobook_deps = [
     cairo_dep
 ]
 
+if icudata_dep.found() and not is_emscripten
+    plutobook_deps += [icudata_dep]
+endif
+
 cairo_required_features = [
     'cairo-pdf',
     'cairo-png',
@@ -100,12 +119,17 @@ cairo_required_features = [
     'cairo-fc'
 ]
 
-foreach feature: cairo_required_features
-    plutobook_deps += dependency(feature,
-        required: true,
-        version: cairo_required_version
-    )
-endforeach
+# When cross-compiling with Emscripten, Cairo is always built from the subproject
+# wrap (no system cairo in the WASM sysroot).  The subproject's libcairo_dep
+# already bundles all features, so we skip the individual feature checks.
+if not is_emscripten
+    foreach feature: cairo_required_features
+        plutobook_deps += dependency(feature,
+            required: true,
+            version: cairo_required_version
+        )
+    endforeach
+endif
 
 curl_default_options = [
     'tool=disabled',
@@ -113,12 +137,16 @@ curl_default_options = [
     'unittests=disabled'
 ]
 
-curl_dep = dependency('libcurl',
-    required: get_option('curl'),
-    version: '>=7.61.1',
-    default_options: curl_default_options,
-    fallback: ['curl', 'curl_dep']
-)
+if is_emscripten
+    curl_dep = disabler()
+else
+    curl_dep = dependency('libcurl',
+        required: get_option('curl'),
+        version: '>=7.61.1',
+        default_options: curl_default_options,
+        fallback: ['curl', 'curl_dep']
+    )
+endif
 
 plutobook_cpp_args = ['-DPLUTOBOOK_BUILD']
 
@@ -130,21 +158,29 @@ if curl_dep.found()
     endif
 endif
 
-jpeg_dep = dependency('libturbojpeg',
-    required: get_option('turbojpeg'),
-    default_options: ['tests=disabled'],
-    fallback: ['libjpeg-turbo', 'turbojpeg_dep']
-)
+if is_emscripten
+    jpeg_dep = disabler()
+else
+    jpeg_dep = dependency('libturbojpeg',
+        required: get_option('turbojpeg'),
+        default_options: ['tests=disabled'],
+        fallback: ['libjpeg-turbo', 'turbojpeg_dep']
+    )
+endif
 
 if jpeg_dep.found()
     plutobook_deps += [jpeg_dep]
     plutobook_cpp_args += ['-DPLUTOBOOK_HAS_TURBOJPEG']
 endif
 
-webp_dep = dependency('libwebp',
-    required: get_option('webp'),
-    fallback: ['libwebp', 'webp_dep']
-)
+if is_emscripten
+    webp_dep = disabler()
+else
+    webp_dep = dependency('libwebp',
+        required: get_option('webp'),
+        fallback: ['libwebp', 'webp_dep']
+    )
+endif
 
 if webp_dep.found()
     plutobook_deps += [webp_dep]
@@ -225,8 +261,6 @@ plutobook_include_dirs = include_directories(
     'source/resource'
 )
 
-cpp = meson.get_compiler('cpp')
-
 plutobook_cpp_args += cpp.get_supported_arguments(
     '-Wno-sign-compare',
     '-Wno-unused-function',
@@ -258,14 +292,20 @@ plutobook_dep = declare_dependency(
 meson.override_dependency('plutobook', plutobook_dep)
 install_headers(plutobook_public_headers, subdir: 'plutobook')
 
-if not get_option('tools').disabled()
+if not get_option('tools').disabled() and not is_emscripten
     subdir('tools')
 endif
 
-pkgmod = import('pkgconfig')
-pkgmod.generate(plutobook_lib,
-    name: 'PlutoBook',
-    description: 'Paged HTML rendering library',
-    filebase: 'plutobook',
-    subdirs: 'plutobook'
-)
+if not is_emscripten
+    pkgmod = import('pkgconfig')
+    pkgmod.generate(plutobook_lib,
+        name: 'PlutoBook',
+        description: 'Paged HTML rendering library',
+        filebase: 'plutobook',
+        subdirs: 'plutobook'
+    )
+endif
+
+if is_emscripten
+    subdir('wasm')
+endif
