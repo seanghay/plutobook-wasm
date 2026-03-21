@@ -17,6 +17,8 @@ wasm_link_args = [
     '-sUSE_PTHREADS=0',
     '-sMODULARIZE=1',
     '-sEXPORT_NAME=PlutoBook',
+    '-sEXPORT_ES6=1',
+    '-sUSE_ES6_IMPORT_META=1',
     '-sALLOW_MEMORY_GROWTH=1',
     '-sMAXIMUM_MEMORY=2147483648',
     '-sINITIAL_MEMORY=67108864',
@@ -31,6 +33,7 @@ if get_option('buildtype') == 'release'
     wasm_link_args += [
         '-Oz',
         '--closure', '1',
+        '-sMALLOC=emmalloc',   # smaller allocator (~60 KB saved vs dlmalloc)
     ]
 endif
 

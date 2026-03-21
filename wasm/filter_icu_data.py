@@ -9,6 +9,10 @@ PlutoBook needs:
   - ulayout.icu, langInfo.res, metadata.res, supplementalData.res
       (locale infrastructure / script detection)
 
+By default CJK data is excluded (cjdict.dict + line_*_cj.brk = ~2.4 MB).
+Without it, CJK text falls back to character-level line breaking (still
+renders correctly). Pass --cjk to keep it.
+
 Everything else (800+ locale .res files, 200+ .cnv converters,
 collation, currency, units, timezone, transliteration, …) is removed
 — saving ~27 MB of the original 32 MB dat file.
@@ -42,11 +46,23 @@ KEEP_FILES = {
     'nfkc_scf.nrm',
 }
 
+# CJK-only files: cjdict.dict + CJ-specific line break rule variants.
+# Without these, CJK text falls back to character-level line breaking.
+CJ_FILES = {
+    'cjdict.dict',
+    'line_cj.brk',
+    'line_loose_cj.brk',
+    'line_loose_phrase_cj.brk',
+    'line_normal_cj.brk',
+    'line_normal_phrase_cj.brk',
+    'line_phrase_cj.brk',
+}
+
 def extract(src: str, dest_dir: str) -> None:
     subprocess.run([ICUPKG, '-x', '*', '-d', dest_dir, src],
                    check=True, capture_output=True)
 
-def filter_dir(data_dir: str) -> list[str]:
+def filter_dir(data_dir: str, keep_cjk: bool) -> list[str]:
     """Remove unwanted files in-place; return list of kept relative paths."""
     kept = []
     for root, dirs, files in os.walk(data_dir, topdown=True):
@@ -60,9 +76,12 @@ def filter_dir(data_dir: str) -> list[str]:
                 else:
                     os.remove(os.path.join(root, f))
         else:
-            # Inside a kept subdir — keep everything
+            # Inside a kept subdir — keep everything except CJ files (unless --cjk)
             for f in files:
-                kept.append(os.path.join(rel_root, f))
+                if not keep_cjk and f in CJ_FILES:
+                    os.remove(os.path.join(root, f))
+                else:
+                    kept.append(os.path.join(rel_root, f))
     return sorted(kept)
 
 def repackage(data_dir: str, filelist: list[str], out_dir: str) -> str:
@@ -83,6 +102,12 @@ def repackage(data_dir: str, filelist: list[str], out_dir: str) -> str:
     return os.path.join(out_dir, PKG_NAME + '.dat')
 
 def main() -> None:
+    keep_cjk = '--cjk' in sys.argv
+    if keep_cjk:
+        print('CJK data: keeping (--cjk flag set)')
+    else:
+        print('CJK data: excluded (pass --cjk to keep CJK dictionary line-breaking)')
+
     print(f'Source : {SRC}  ({os.path.getsize(SRC)//1024} KB)')
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -96,7 +121,7 @@ def main() -> None:
         total = sum(len(f) for _, _, fs in os.walk(data_dir) for f in fs)
         print(f'  {total} files extracted')
 
-        kept = filter_dir(data_dir)
+        kept = filter_dir(data_dir, keep_cjk)
         print(f'  {len(kept)} files kept after filter')
 
         print('Repackaging…')

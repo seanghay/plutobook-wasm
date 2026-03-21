@@ -48,11 +48,11 @@ const html = `<!DOCTYPE html>
 </html>`;
 
 async function main() {
-  // Load the Emscripten factory (CommonJS) and the ESM wrapper.
-  const factory             = require(path.join(DIST, 'plutobook.js'));
-  const { createPlutoBook } = await import(
-    pathToFileURL(path.join(__dirname, 'wasm', 'plutobook.js')).href
-  );
+  // Load the Emscripten factory (ESM) and the ESM wrapper in parallel.
+  const [{ default: factory }, { createPlutoBook }] = await Promise.all([
+    import(pathToFileURL(path.join(DIST, 'plutobook.js')).href),
+    import(pathToFileURL(path.join(__dirname, 'wasm', 'plutobook.js')).href),
+  ]);
 
   // Read font files from disk and pass as pre-loaded binary data.
   const fontFiles = fs.readdirSync(FONTS_DIR)
