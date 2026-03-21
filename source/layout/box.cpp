@@ -16,8 +16,10 @@
 #include "graphicscontext.h"
 #include "imageresource.h"
 #include "document.h"
+#include "cssrule.h"
 
 #include <cmath>
+#include <numbers>
 
 namespace plutobook {
 
@@ -478,11 +480,89 @@ static Size computeBackgroundImageIntrinsicSize(const RefPtr<Image>& backgroundI
     return positioningAreaSize;
 }
 
+static GradientStops resolveGradientStops(const std::vector<CSSGradientValue::ColorStop>& cssStops)
+{
+    GradientStops stops;
+    stops.reserve(cssStops.size());
+    for(const auto& s : cssStops)
+        stops.push_back({s.offset, s.color});
+
+    // Fix first and last auto-placed stops
+    if(stops.front().first < 0.f) stops.front().first = 0.f;
+    if(stops.back().first  < 0.f) stops.back().first  = 1.f;
+
+    // Clamp explicitly placed stops to be monotonically non-decreasing
+    for(size_t i = 1; i < stops.size(); ++i)
+        if(stops[i].first >= 0.f && stops[i].first < stops[i-1].first)
+            stops[i].first = stops[i-1].first;
+
+    // Distribute auto-placed stops between surrounding specified ones
+    size_t i = 1;
+    while(i < stops.size() - 1) {
+        if(stops[i].first >= 0.f) { ++i; continue; }
+        size_t runStart = i;
+        while(i < stops.size() - 1 && stops[i].first < 0.f) ++i;
+        float a = stops[runStart - 1].first;
+        float b = stops[i].first >= 0.f ? stops[i].first : 1.f;
+        size_t n = i - runStart + 1;
+        for(size_t j = runStart; j < i; ++j)
+            stops[j].first = a + (b - a) * float(j - runStart + 1) / float(n);
+    }
+    return stops;
+}
+
+static void paintLinearGradient(GraphicsContext& ctx, const Rect& rect, const CSSGradientValue& gradient)
+{
+    float angleRad = gradient.angle() * float(std::numbers::pi) / 180.f;
+    float sinA = std::sin(angleRad);
+    float cosA = std::cos(angleRad);
+    float halfLen = 0.5f * (std::abs(rect.w * sinA) + std::abs(rect.h * cosA));
+    float cx = rect.x + rect.w * 0.5f;
+    float cy = rect.y + rect.h * 0.5f;
+
+    LinearGradientValues values;
+    values.x1 = cx - sinA * halfLen;
+    values.y1 = cy + cosA * halfLen;
+    values.x2 = cx + sinA * halfLen;
+    values.y2 = cy - cosA * halfLen;
+
+    auto stops = resolveGradientStops(gradient.colorStops());
+    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
+    ctx.setLinearGradient(values, stops, Transform(), isRepeating ? SpreadMethod::Repeat : SpreadMethod::Pad, 1.f);
+}
+
+static void paintRadialGradient(GraphicsContext& ctx, const Rect& rect, const CSSGradientValue& gradient)
+{
+    float cxAbs = rect.x + gradient.cx() * rect.w;
+    float cyAbs = rect.y + gradient.cy() * rect.h;
+
+    // Farthest-corner radius from center to the farthest corner
+    float dx = std::max(std::abs(cxAbs - rect.x), std::abs(cxAbs - (rect.x + rect.w)));
+    float dy = std::max(std::abs(cyAbs - rect.y), std::abs(cyAbs - (rect.y + rect.h)));
+
+    // Simulate ellipse by scaling: use unit circle + scale transform
+    float rx = dx > 0.f ? dx : 1.f;
+    float ry = dy > 0.f ? dy : 1.f;
+
+    RadialGradientValues values;
+    values.fx = 0.f; values.fy = 0.f;
+    values.cx = 0.f; values.cy = 0.f;
+    values.r  = 1.f;
+
+    // Transform: scale unit circle to ellipse (rx, ry) centred at (cxAbs, cyAbs)
+    Transform gradientTransform(rx, 0.f, 0.f, ry, cxAbs, cyAbs);
+
+    auto stops = resolveGradientStops(gradient.colorStops());
+    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingRadial);
+    ctx.setRadialGradient(values, stops, gradientTransform, isRepeating ? SpreadMethod::Repeat : SpreadMethod::Pad, 1.f);
+}
+
 void BoxModel::paintBackgroundStyle(const PaintInfo& info, const Rect& borderRect, const BoxStyle* backgroundStyle, bool includeLeftEdge, bool includeRightEdge) const
 {
     auto backgroundColor = backgroundStyle->backgroundColor();
     auto backgroundImage = backgroundStyle->backgroundImage();
-    if(backgroundImage == nullptr && !backgroundColor.alpha())
+    auto backgroundGradient = backgroundStyle->backgroundGradient();
+    if(backgroundImage == nullptr && backgroundGradient == nullptr && !backgroundColor.alpha())
         return;
     auto clipRect = style()->getBorderRoundedRect(borderRect, includeLeftEdge, includeRightEdge);
     auto backgroundClip = backgroundStyle->backgroundClip();
@@ -515,6 +595,32 @@ void BoxModel::paintBackgroundStyle(const PaintInfo& info, const Rect& borderRec
 
     info->setColor(backgroundColor);
     info->fillRect(borderRect);
+    if(backgroundGradient) {
+        Rect gradientArea(borderRect);
+        auto backgroundOrigin = backgroundStyle->backgroundOrigin();
+        if(backgroundOrigin == BackgroundBox::PaddingBox || backgroundOrigin == BackgroundBox::ContentBox) {
+            auto topWidth = borderTop();
+            auto rightWidth = borderRight();
+            auto bottomWidth = borderBottom();
+            auto leftWidth = borderLeft();
+            if(backgroundOrigin == BackgroundBox::ContentBox) {
+                topWidth += paddingTop();
+                rightWidth += paddingRight();
+                bottomWidth += paddingBottom();
+                leftWidth += paddingLeft();
+            }
+            if(!includeLeftEdge) leftWidth = 0.f;
+            if(!includeRightEdge) rightWidth = 0.f;
+            gradientArea.shrink(topWidth, rightWidth, bottomWidth, leftWidth);
+        }
+        bool isLinear = (backgroundGradient->gradientType() == CSSGradientValue::GradientType::Linear
+            || backgroundGradient->gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
+        if(isLinear)
+            paintLinearGradient(*info, gradientArea, *backgroundGradient);
+        else
+            paintRadialGradient(*info, gradientArea, *backgroundGradient);
+        info->fillRect(gradientArea);
+    }
     if(backgroundImage) {
         Rect positioningArea(0, 0, borderRect.w, borderRect.h);
         auto backgroundOrigin = backgroundStyle->backgroundOrigin();

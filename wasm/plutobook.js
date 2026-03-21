@@ -18,7 +18,7 @@
  *     locateFile: (f) => `/dist/${f}`,
  *   });
  *
- *   const pdfBytes = pb.htmlToPdf('<h1>Hello</h1>');
+ *   const pdfBytes = await pb.htmlToPdf('<h1>Hello</h1>');
  */
 
 // Minimal fonts.conf written into /fonts/ so FontConfig finds the fonts.
@@ -131,16 +131,17 @@ export async function createPlutoBook(emscriptenFactory, { fonts = [], locateFil
      * @param {object}  [options.resources]  { [url]: Uint8Array } pre-loaded blobs.
      * @param {string}  [options.userStyle]  Extra CSS applied as user stylesheet.
      * @param {string}  [options.baseUrl]    Base URL for resolving relative URLs.
-     * @returns {Uint8Array}
+     * @returns {Promise<Uint8Array>}
      */
-    htmlToPdf(html, {
+    async htmlToPdf(html, {
       pageSize  = PageSize.A4,
       margins   = Margins.Normal,
       resources = {},
       userStyle = '',
       baseUrl   = '',
     } = {}) {
-      _loadResources(Module, resources);
+      const fetched = await _autoFetchResources(html, baseUrl);
+      _loadResources(Module, { ...fetched, ...resources });
 
       const [pageW, pageH]   = pageSize;
       const [mT, mR, mB, mL] = margins;
@@ -183,9 +184,9 @@ export async function createPlutoBook(emscriptenFactory, { fonts = [], locateFil
      * @param {object}  [options.resources]  { [url]: Uint8Array } pre-loaded blobs.
      * @param {string}  [options.userStyle]  Extra CSS applied as user stylesheet.
      * @param {string}  [options.baseUrl]    Base URL for resolving relative URLs.
-     * @returns {Uint8Array}
+     * @returns {Promise<Uint8Array>}
      */
-    htmlToImage(html, {
+    async htmlToImage(html, {
       format    = 'png',
       width     = -1,
       height    = -1,
@@ -196,7 +197,8 @@ export async function createPlutoBook(emscriptenFactory, { fonts = [], locateFil
       userStyle = '',
       baseUrl   = '',
     } = {}) {
-      _loadResources(Module, resources);
+      const fetched = await _autoFetchResources(html, baseUrl);
+      _loadResources(Module, { ...fetched, ...resources });
 
       const [pageW, pageH]   = pageSize;
       const [mT, mR, mB, mL] = margins;
@@ -227,6 +229,68 @@ export async function createPlutoBook(emscriptenFactory, { fonts = [], locateFil
       return imgBytes;
     },
   };
+}
+
+// ── Auto resource fetcher ─────────────────────────────────────────────────────
+
+/**
+ * Extract all external resource URLs referenced in the HTML.
+ * Handles src="...", href="..." on <link> tags, and CSS url(...).
+ * Returns a Set of resolved absolute URL strings.
+ */
+function _extractResourceUrls(html, baseUrl) {
+  const urls = new Set();
+  const base = baseUrl || undefined;
+
+  function add(raw) {
+    if (!raw) return;
+    raw = raw.trim();
+    if (!raw || raw.startsWith('data:') || raw.startsWith('blob:') ||
+        raw.startsWith('javascript:') || raw.startsWith('#')) return;
+    try {
+      const resolved = base ? new URL(raw, base).href : new URL(raw).href;
+      urls.add(resolved);
+    } catch (_) { /* relative URL with no base — skip */ }
+  }
+
+  // src="..." or src='...'
+  for (const m of html.matchAll(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/gi))
+    add(m[1] ?? m[2]);
+
+  // <link href="..."> (stylesheets, fonts)
+  for (const m of html.matchAll(/<link[^>]+href\s*=\s*(?:"([^"]*)"|'([^']*)')/gi))
+    add(m[1] ?? m[2]);
+
+  // url(...) inside <style> blocks and style="" attributes
+  for (const m of html.matchAll(/url\(\s*(?:"([^")]+)"|'([^')]+)'|([^)'"]+))\s*\)/gi))
+    add(m[1] ?? m[2] ?? m[3]);
+
+  return urls;
+}
+
+/**
+ * Fetch all external resources referenced in the HTML string.
+ * Returns a plain object { [resolvedUrl]: Uint8Array }.
+ * Failures are silently ignored (best-effort).
+ */
+async function _autoFetchResources(html, baseUrl) {
+  const urls = _extractResourceUrls(html, baseUrl);
+  if (urls.size === 0) return {};
+  const results = await Promise.allSettled(
+    [...urls].map(async url => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return [url, new Uint8Array(await res.arrayBuffer())];
+    })
+  );
+  const map = {};
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      const [url, bytes] = r.value;
+      map[url] = bytes;
+    }
+  }
+  return map;
 }
 
 // ── Resource loader ───────────────────────────────────────────────────────────

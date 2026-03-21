@@ -293,6 +293,7 @@ enum class CSSValueType {
     LocalUrl,
     Url,
     Image,
+    Gradient,
     Color,
     Counter,
     FontFeature,
@@ -1095,6 +1096,52 @@ private:
 template<>
 struct is_a<CSSImageValue> {
     static bool check(const CSSValue& value) { return value.type() == CSSValueType::Image; }
+};
+
+class CSSGradientValue final : public CSSValue {
+public:
+    enum class GradientType {
+        Linear,
+        Radial,
+        RepeatingLinear,
+        RepeatingRadial
+    };
+
+    struct ColorStop {
+        float offset; // -1.f means unspecified (auto-placed)
+        Color color;
+    };
+
+    static RefPtr<CSSGradientValue> create(Heap* heap, GradientType gradientType, float angle, float cx, float cy, std::vector<ColorStop> stops);
+
+    GradientType gradientType() const { return m_gradientType; }
+    float angle() const { return m_angle; }   // degrees for linear (0 = to top, 90 = to right)
+    float cx() const { return m_cx; }          // center-x fraction (0-1) for radial
+    float cy() const { return m_cy; }          // center-y fraction (0-1) for radial
+    const std::vector<ColorStop>& colorStops() const { return m_stops; }
+
+    CSSValueType type() const final { return CSSValueType::Gradient; }
+
+private:
+    CSSGradientValue(GradientType gradientType, float angle, float cx, float cy, std::vector<ColorStop> stops)
+        : m_gradientType(gradientType), m_angle(angle), m_cx(cx), m_cy(cy), m_stops(std::move(stops))
+    {}
+
+    GradientType m_gradientType;
+    float m_angle;
+    float m_cx;
+    float m_cy;
+    std::vector<ColorStop> m_stops;
+};
+
+inline RefPtr<CSSGradientValue> CSSGradientValue::create(Heap* heap, GradientType gradientType, float angle, float cx, float cy, std::vector<ColorStop> stops)
+{
+    return adoptPtr(new (heap) CSSGradientValue(gradientType, angle, cx, cy, std::move(stops)));
+}
+
+template<>
+struct is_a<CSSGradientValue> {
+    static bool check(const CSSValue& value) { return value.type() == CSSValueType::Gradient; }
 };
 
 class CSSColorValue final : public CSSValue {

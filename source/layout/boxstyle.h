@@ -665,6 +665,7 @@ using FontVariationList = std::forward_list<FontVariation>;
 using FontFamilyList = std::forward_list<GlobalString>;
 
 class CSSValue;
+class CSSGradientValue;
 class CSSVariableData;
 
 using CSSPropertyMap = std::pmr::unordered_map<CSSPropertyID, RefPtr<CSSValue>>;
@@ -795,6 +796,7 @@ public:
     RefPtr<Image> listStyleImage() const;
 
     RefPtr<Image> backgroundImage() const;
+    const CSSGradientValue* backgroundGradient() const;
     Color backgroundColor() const;
     BackgroundRepeat backgroundRepeat() const { return m_backgroundRepeat; }
     BackgroundBox backgroundOrigin() const { return m_backgroundOrigin; }

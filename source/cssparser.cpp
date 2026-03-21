@@ -2417,10 +2417,180 @@ RefPtr<CSSValue> CSSParser::consumeUrlOrNone(CSSTokenStream& input)
     return consumeUrl(input);
 }
 
+RefPtr<CSSValue> CSSParser::consumeGradient(CSSTokenStream& input, CSSGradientValue::GradientType gradientType)
+{
+    assert(input->type() == CSSToken::Type::Function);
+    CSSTokenStreamGuard guard(input);
+    auto block = input.consumeBlock();
+    block.consumeWhitespace();
+
+    float angle = 180.f; // default: to bottom
+    float cx = 0.5f, cy = 0.5f; // radial center fractions
+
+    bool isLinear = (gradientType == CSSGradientValue::GradientType::Linear
+        || gradientType == CSSGradientValue::GradientType::RepeatingLinear);
+
+    // For linear gradients, try to parse optional angle / "to <direction>" prefix.
+    if(isLinear) {
+        CSSTokenStreamGuard prefixGuard(block);
+        bool hasParsedAngle = false;
+
+        if(block->type() == CSSToken::Type::Dimension) {
+            if(auto angleVal = consumeAngle(block)) {
+                angle = to<CSSAngleValue>(*angleVal).valueInDegrees();
+                hasParsedAngle = true;
+            }
+        } else if(block->type() == CSSToken::Type::Ident
+            && identMatches("to", 2, block->data())) {
+            block.consumeIncludingWhitespace();
+            // Parse one or two direction keywords.
+            bool hasTop = false, hasBottom = false, hasLeft = false, hasRight = false;
+            for(int kw = 0; kw < 2 && block->type() == CSSToken::Type::Ident; ++kw) {
+                auto kd = block->data();
+                if(identMatches("top",    3, kd))    { hasTop    = true; block.consumeIncludingWhitespace(); }
+                else if(identMatches("bottom", 6, kd)) { hasBottom = true; block.consumeIncludingWhitespace(); }
+                else if(identMatches("left",   4, kd)) { hasLeft   = true; block.consumeIncludingWhitespace(); }
+                else if(identMatches("right",  5, kd)) { hasRight  = true; block.consumeIncludingWhitespace(); }
+                else break;
+            }
+            if(hasTop || hasBottom || hasLeft || hasRight) {
+                if(hasTop    && !hasLeft && !hasRight) angle = 0.f;
+                else if(hasBottom && !hasLeft && !hasRight) angle = 180.f;
+                else if(hasRight  && !hasTop  && !hasBottom) angle = 90.f;
+                else if(hasLeft   && !hasTop  && !hasBottom) angle = 270.f;
+                else if(hasTop    && hasRight) angle = 45.f;
+                else if(hasBottom && hasRight) angle = 135.f;
+                else if(hasBottom && hasLeft)  angle = 225.f;
+                else if(hasTop    && hasLeft)  angle = 315.f;
+                hasParsedAngle = true;
+            }
+        }
+
+        if(hasParsedAngle) {
+            if(!block.consumeCommaIncludingWhitespace()) {
+                return nullptr;
+            }
+            prefixGuard.release();
+        }
+        // else: no angle token consumed — fall through to color stops
+    } else {
+        // For radial gradients, skip optional shape/size/position modifiers for now.
+        // Detect and consume "at <position>" or shape keywords before the first comma.
+        CSSTokenStreamGuard prefixGuard(block);
+        bool skipComma = false;
+
+        // Skip shape: circle / ellipse
+        if(block->type() == CSSToken::Type::Ident) {
+            auto kd = block->data();
+            if(identMatches("circle", 6, kd) || identMatches("ellipse", 7, kd)) {
+                block.consumeIncludingWhitespace();
+                skipComma = true;
+            }
+        }
+        // Skip size keywords: closest-side, closest-corner, farthest-side, farthest-corner
+        if(block->type() == CSSToken::Type::Ident) {
+            auto kd = block->data();
+            if(identMatches("closest-side",    12, kd) || identMatches("closest-corner",  14, kd)
+                || identMatches("farthest-side", 13, kd) || identMatches("farthest-corner", 15, kd)) {
+                block.consumeIncludingWhitespace();
+                skipComma = true;
+            }
+        }
+        // Parse "at <position>" for center
+        if(block->type() == CSSToken::Type::Ident && identMatches("at", 2, block->data())) {
+            block.consumeIncludingWhitespace();
+            // Parse up to two length-percentage keywords for x, y
+            auto parsePositionComponent = [&](float& out) -> bool {
+                if(block->type() == CSSToken::Type::Ident) {
+                    auto kd = block->data();
+                    if(identMatches("center", 6, kd))      { out = 0.5f; block.consumeIncludingWhitespace(); return true; }
+                    if(identMatches("top",    3, kd))       { out = 0.0f; block.consumeIncludingWhitespace(); return true; }
+                    if(identMatches("bottom", 6, kd))       { out = 1.0f; block.consumeIncludingWhitespace(); return true; }
+                    if(identMatches("left",   4, kd))       { out = 0.0f; block.consumeIncludingWhitespace(); return true; }
+                    if(identMatches("right",  5, kd))       { out = 1.0f; block.consumeIncludingWhitespace(); return true; }
+                } else if(block->type() == CSSToken::Type::Percentage) {
+                    out = block->number() / 100.f;
+                    block.consumeIncludingWhitespace();
+                    return true;
+                }
+                return false;
+            };
+            parsePositionComponent(cx);
+            parsePositionComponent(cy);
+            skipComma = true;
+        }
+
+        if(skipComma) {
+            if(block->type() == CSSToken::Type::Comma) {
+                block.consumeCommaIncludingWhitespace();
+                prefixGuard.release();
+            } else {
+                // No comma — rewind: position info is optional; maybe it was a color
+                cx = 0.5f; cy = 0.5f;
+                // prefixGuard destructs and rewinds
+            }
+        }
+    }
+
+    // Parse color stops: <color> [<percentage>] (, <color> [<percentage>])*
+    std::vector<CSSGradientValue::ColorStop> stops;
+    bool first = true;
+    while(!block.empty()) {
+        if(!first) {
+            if(!block.consumeCommaIncludingWhitespace())
+                break;
+        }
+        first = false;
+
+        auto colorVal = consumeColor(block);
+        if(colorVal == nullptr) {
+            return nullptr;
+        }
+
+        Color color;
+        if(is<CSSColorValue>(*colorVal))
+            color = to<CSSColorValue>(*colorVal).value();
+        else
+            color = Color(0, 0, 0, 255); // fallback for currentColor / named
+
+        float offset = -1.f; // auto
+        if(block->type() == CSSToken::Type::Percentage) {
+            offset = std::clamp(block->number() / 100.f, 0.f, 1.f);
+            block.consumeIncludingWhitespace();
+        }
+
+        stops.push_back({offset, color});
+    }
+
+    if(stops.size() < 2)
+        return nullptr;
+
+    input.consumeWhitespace();
+    guard.release();
+    return CSSGradientValue::create(m_heap, gradientType, angle, cx, cy, std::move(stops));
+}
+
 RefPtr<CSSValue> CSSParser::consumeImage(CSSTokenStream& input)
 {
     if(auto token = consumeUrlToken(input))
         return CSSImageValue::create(m_heap, m_context.completeUrl(token->data()));
+
+    if(input->type() == CSSToken::Type::Function) {
+        auto name = input->data();
+        CSSGradientValue::GradientType gradientType;
+        if(identMatches("linear-gradient", 15, name))
+            gradientType = CSSGradientValue::GradientType::Linear;
+        else if(identMatches("repeating-linear-gradient", 25, name))
+            gradientType = CSSGradientValue::GradientType::RepeatingLinear;
+        else if(identMatches("radial-gradient", 15, name))
+            gradientType = CSSGradientValue::GradientType::Radial;
+        else if(identMatches("repeating-radial-gradient", 25, name))
+            gradientType = CSSGradientValue::GradientType::RepeatingRadial;
+        else
+            return nullptr;
+        return consumeGradient(input, gradientType);
+    }
+
     return nullptr;
 }
 

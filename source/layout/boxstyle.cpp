@@ -442,9 +442,17 @@ RefPtr<Image> BoxStyle::listStyleImage() const
 RefPtr<Image> BoxStyle::backgroundImage() const
 {
     auto value = get(CSSPropertyID::BackgroundImage);
-    if(value == nullptr)
+    if(value == nullptr || is<CSSGradientValue>(*value))
         return nullptr;
     return convertImageOrNone(*value);
+}
+
+const CSSGradientValue* BoxStyle::backgroundGradient() const
+{
+    auto value = get(CSSPropertyID::BackgroundImage);
+    if(value && is<CSSGradientValue>(*value))
+        return &to<CSSGradientValue>(*value);
+    return nullptr;
 }
 
 Color BoxStyle::backgroundColor() const

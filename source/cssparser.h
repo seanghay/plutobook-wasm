@@ -115,6 +115,7 @@ private:
     RefPtr<CSSValue> consumeUrlOrNone(CSSTokenStream& input);
     RefPtr<CSSValue> consumeImage(CSSTokenStream& input);
     RefPtr<CSSValue> consumeImageOrNone(CSSTokenStream& input);
+    RefPtr<CSSValue> consumeGradient(CSSTokenStream& input, CSSGradientValue::GradientType gradientType);
     RefPtr<CSSValue> consumeColor(CSSTokenStream& input);
     RefPtr<CSSValue> consumeRgb(CSSTokenStream& input);
     RefPtr<CSSValue> consumeHsl(CSSTokenStream& input);
