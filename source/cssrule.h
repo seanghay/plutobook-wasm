@@ -324,6 +324,7 @@ enum class CSSPropertyID : uint16_t {
     AlignItems,
     AlignSelf,
     AlignmentBaseline,
+    AspectRatio,
     Background,
     BackgroundAttachment,
     BackgroundClip,
@@ -1108,7 +1109,8 @@ public:
     };
 
     struct ColorStop {
-        float offset; // -1.f means unspecified (auto-placed)
+        float offset;      // -1.f means unspecified (auto-placed); otherwise fraction [0,1] or px when isAbsolute
+        bool isAbsolute;   // true: offset is in pixels, false: offset is a fraction [0,1] or -1
         Color color;
     };
 

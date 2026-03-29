@@ -121,6 +121,7 @@ private:
     RefPtr<CSSValue> consumeHsl(CSSTokenStream& input);
     RefPtr<CSSValue> consumeHwb(CSSTokenStream& input);
 
+    RefPtr<CSSValue> consumeAspectRatio(CSSTokenStream& input);
     RefPtr<CSSValue> consumePaint(CSSTokenStream& input);
     RefPtr<CSSValue> consumeListStyleType(CSSTokenStream& input);
     RefPtr<CSSValue> consumeQuotes(CSSTokenStream& input);

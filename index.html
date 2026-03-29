@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PlutoBook — Multi-Background &amp; Aspect-Ratio Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; margin: 0; background: #1a1a2e; color: #eee; }
+    header {
+      padding: 1.5em 2em;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      display: flex; align-items: center; gap: 1em;
+    }
+    header h1 { margin: 0; font-size: 1.2em; color: #e94560; }
+    header p  { margin: 0; font-size: .85em; color: #aaa; }
+    .controls {
+      padding: 1em 2em;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      display: flex; align-items: center; gap: 1em; flex-wrap: wrap;
+    }
+    button {
+      padding: .55em 1.4em; font-size: .95em; cursor: pointer;
+      background: #e94560; color: #fff; border: none; border-radius: 4px;
+      font-weight: 600;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #status { font-size: .85em; color: #aaa; }
+    .layout { display: flex; height: calc(100vh - 120px); }
+    .pane {
+      flex: 1; overflow: auto; padding: 1em;
+      border-right: 1px solid #0f3460;
+    }
+    .pane:last-child { border-right: none; }
+    .pane h2 {
+      margin: 0 0 .5em; font-size: .8em; text-transform: uppercase;
+      letter-spacing: .06em; color: #888;
+    }
+    textarea {
+      width: 100%; height: calc(100% - 2em);
+      background: #0d1117; color: #c9d1d9;
+      border: 1px solid #30363d; border-radius: 4px;
+      padding: .75em; font-family: monospace; font-size: .82em;
+      resize: none;
+    }
+    iframe#pdf-out {
+      width: 100%; height: calc(100% - 2em);
+      border: 1px solid #30363d; border-radius: 4px;
+      background: #fff; display: none;
+    }
+    .placeholder {
+      height: calc(100% - 2em);
+      display: flex; align-items: center; justify-content: center;
+      color: #555; font-size: .9em;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>PlutoBook WASM</h1>
+    <p>Multi-background layers &amp; CSS aspect-ratio demo</p>
+  </div>
+</header>
+
+<div class="controls">
+  <button id="render-btn">Generate PDF</button>
+  <a id="dl-link" style="display:none">
+    <button type="button" id="dl-btn">Download PDF</button>
+  </a>
+  <span id="status">Click "Generate PDF" to render.</span>
+</div>
+
+<div class="layout">
+  <div class="pane">
+    <h2>HTML Source</h2>
+    <textarea id="html-input" spellcheck="false"></textarea>
+  </div>
+  <div class="pane">
+    <h2>PDF Preview</h2>
+    <div class="placeholder" id="placeholder">PDF will appear here.</div>
+    <iframe id="pdf-out" title="PDF Preview"></iframe>
+  </div>
+</div>
+
+<script src="dist/plutobook.js"></script>
+<script type="module">
+  import { createPlutoBook, PageSize, Margins } from './wasm/plutobook.js';
+
+  // ── Inline demo HTML (same content as multi_bg_aspect.html) ─────────────────
+
+  const DEMO_HTML = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { font-family: sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+h2 { font-size: 13px; margin: 16px 0 8px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+.grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.label { font-size: 11px; color: #666; margin-top: 4px; width: 220px; }
+
+/* Multiple background layers */
+.multi1 {
+  width: 220px; height: 120px;
+  background:
+    linear-gradient(to right, rgba(231,76,60,0.8), rgba(231,76,60,0)),
+    linear-gradient(to bottom, rgba(52,152,219,0.8), rgba(52,152,219,0)),
+    #2c3e50;
+}
+.multi2 {
+  width: 220px; height: 120px;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4) 0%, transparent 50%),
+    linear-gradient(135deg, #667eea, #764ba2);
+}
+.multi3 {
+  width: 220px; height: 120px;
+  background:
+    linear-gradient(to right, rgba(255,255,255,0.15) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.15) 1px, transparent 1px),
+    #1a1a2e;
+  background-size: auto, auto, auto;
+}
+.multi4 {
+  width: 220px; height: 120px;
+  background:
+    radial-gradient(ellipse at top left, rgba(255,200,0,0.6) 0%, transparent 60%),
+    radial-gradient(ellipse at bottom right, rgba(255,50,50,0.6) 0%, transparent 60%),
+    #1a252f;
+}
+.multi5 {
+  width: 220px; height: 120px;
+  background:
+    repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.1) 10px, rgba(255,255,255,0.1) 20px),
+    linear-gradient(to right, #e74c3c, #9b59b6);
+}
+.multi6 {
+  width: 220px; height: 120px;
+  background:
+    linear-gradient(to bottom, rgba(0,0,0,0) 60%, rgba(0,0,0,0.7) 100%),
+    linear-gradient(to right, #2ecc71, #3498db);
+}
+
+/* aspect-ratio */
+.ar-container { width: 200px; background: #3498db; }
+.ar-16-9 { aspect-ratio: 16/9; background: linear-gradient(135deg, #e74c3c, #f39c12); }
+.ar-1-1  { aspect-ratio: 1/1;  background: linear-gradient(135deg, #2ecc71, #1abc9c); }
+.ar-4-3  { aspect-ratio: 4/3;  background: linear-gradient(135deg, #9b59b6, #3498db); }
+.ar-2    { aspect-ratio: 2;    background: linear-gradient(135deg, #e74c3c, #9b59b6); }
+</style>
+</head>
+<body>
+
+<h2>Multiple Background Layers</h2>
+<div class="grid">
+  <div><div class="multi1"></div><div class="label">2 linear gradients + color</div></div>
+  <div><div class="multi2"></div><div class="label">radial highlight + linear base</div></div>
+  <div><div class="multi3"></div><div class="label">grid lines + color</div></div>
+  <div><div class="multi4"></div><div class="label">dual radial glows + dark bg</div></div>
+  <div><div class="multi5"></div><div class="label">stripes over gradient</div></div>
+  <div><div class="multi6"></div><div class="label">fade overlay + gradient</div></div>
+</div>
+
+<h2>CSS aspect-ratio</h2>
+<div class="grid">
+  <div>
+    <div class="ar-container"><div class="ar-16-9"></div></div>
+    <div class="label">16/9 (widescreen)</div>
+  </div>
+  <div>
+    <div class="ar-container"><div class="ar-1-1"></div></div>
+    <div class="label">1/1 (square)</div>
+  </div>
+  <div>
+    <div class="ar-container"><div class="ar-4-3"></div></div>
+    <div class="label">4/3 (classic)</div>
+  </div>
+  <div>
+    <div class="ar-container"><div class="ar-2"></div></div>
+    <div class="label">2 (shorthand = 2/1)</div>
+  </div>
+</div>
+
+</body>
+</html>`;
+
+  // ── Wire up UI ────────────────────────────────────────────────────────────────
+
+  const textarea    = document.getElementById('html-input');
+  const statusEl    = document.getElementById('status');
+  const renderBtn   = document.getElementById('render-btn');
+  const pdfOut      = document.getElementById('pdf-out');
+  const placeholder = document.getElementById('placeholder');
+  const dlLink      = document.getElementById('dl-link');
+
+  textarea.value = DEMO_HTML;
+
+  // Font descriptors — fetched from the wasm/fonts/ directory at render time.
+  const FONTS = [
+    'DejaVuSans.ttf',
+    'DejaVuSans-Bold.ttf',
+    'DejaVuSans-Oblique.ttf',
+    'DejaVuSans-BoldOblique.ttf',
+    'DejaVuSerif.ttf',
+    'DejaVuSerif-Bold.ttf',
+    'DejaVuSansMono.ttf',
+  ].map(name => ({ name, url: `wasm/fonts/${name}` }));
+
+  let pb = null; // cached PlutoBook instance
+
+  renderBtn.addEventListener('click', async () => {
+    renderBtn.disabled = true;
+    dlLink.style.display = 'none';
+
+    try {
+      if (!pb) {
+        statusEl.textContent = 'Loading fonts & initialising WASM…';
+        pb = await createPlutoBook(window.PlutoBook, { fonts: FONTS });
+      }
+
+      statusEl.textContent = 'Rendering PDF…';
+      const html = textarea.value;
+
+      const pdfBytes = await pb.htmlToPdf(html, {
+        pageSize: PageSize.A4,
+        margins:  Margins.Narrow,
+      });
+
+      const blob   = new Blob([pdfBytes], { type: 'application/pdf' });
+      const blobUrl = URL.createObjectURL(blob);
+
+      placeholder.style.display = 'none';
+      pdfOut.style.display = 'block';
+      pdfOut.src = blobUrl;
+
+      // Download link
+      dlLink.href = blobUrl;
+      dlLink.download = 'plutobook-demo.pdf';
+      dlLink.style.display = 'inline';
+
+      statusEl.textContent = `Done — ${pdfBytes.byteLength.toLocaleString()} bytes.`;
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+      console.error(err);
+    } finally {
+      renderBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

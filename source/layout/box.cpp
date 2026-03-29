@@ -480,12 +480,14 @@ static Size computeBackgroundImageIntrinsicSize(const RefPtr<Image>& backgroundI
     return positioningAreaSize;
 }
 
-static GradientStops resolveGradientStops(const std::vector<CSSGradientValue::ColorStop>& cssStops)
+static GradientStops resolveGradientStops(const std::vector<CSSGradientValue::ColorStop>& cssStops, float lineLen)
 {
     GradientStops stops;
     stops.reserve(cssStops.size());
-    for(const auto& s : cssStops)
-        stops.push_back({s.offset, s.color});
+    for(const auto& s : cssStops) {
+        float off = s.isAbsolute ? (lineLen > 0.f ? s.offset / lineLen : 0.f) : s.offset;
+        stops.push_back({off, s.color});
+    }
 
     // Fix first and last auto-placed stops
     if(stops.front().first < 0.f) stops.front().first = 0.f;
@@ -511,8 +513,17 @@ static GradientStops resolveGradientStops(const std::vector<CSSGradientValue::Co
     return stops;
 }
 
+static float gradientPeriod(const std::vector<CSSGradientValue::ColorStop>& stops)
+{
+    float maxPx = 0.f;
+    for(const auto& s : stops)
+        if(s.isAbsolute && s.offset > maxPx) maxPx = s.offset;
+    return maxPx;
+}
+
 static void paintLinearGradient(GraphicsContext& ctx, const Rect& rect, const CSSGradientValue& gradient)
 {
+    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
     float angleRad = gradient.angle() * float(std::numbers::pi) / 180.f;
     float sinA = std::sin(angleRad);
     float cosA = std::cos(angleRad);
@@ -520,19 +531,28 @@ static void paintLinearGradient(GraphicsContext& ctx, const Rect& rect, const CS
     float cx = rect.x + rect.w * 0.5f;
     float cy = rect.y + rect.h * 0.5f;
 
-    LinearGradientValues values;
-    values.x1 = cx - sinA * halfLen;
-    values.y1 = cy + cosA * halfLen;
-    values.x2 = cx + sinA * halfLen;
-    values.y2 = cy - cosA * halfLen;
+    // For repeating gradients with pixel stops, size the vector to exactly one period
+    // so Cairo's Repeat tiling produces the correct stripe width.
+    float lineLen = 2.f * halfLen;
+    if(isRepeating) {
+        float period = gradientPeriod(gradient.colorStops());
+        if(period > 0.f) lineLen = period;
+    }
+    float hl = lineLen * 0.5f;
 
-    auto stops = resolveGradientStops(gradient.colorStops());
-    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
+    LinearGradientValues values;
+    values.x1 = cx - sinA * hl;
+    values.y1 = cy + cosA * hl;
+    values.x2 = cx + sinA * hl;
+    values.y2 = cy - cosA * hl;
+
+    auto stops = resolveGradientStops(gradient.colorStops(), lineLen);
     ctx.setLinearGradient(values, stops, Transform(), isRepeating ? SpreadMethod::Repeat : SpreadMethod::Pad, 1.f);
 }
 
 static void paintRadialGradient(GraphicsContext& ctx, const Rect& rect, const CSSGradientValue& gradient)
 {
+    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingRadial);
     float cxAbs = rect.x + gradient.cx() * rect.w;
     float cyAbs = rect.y + gradient.cy() * rect.h;
 
@@ -540,181 +560,181 @@ static void paintRadialGradient(GraphicsContext& ctx, const Rect& rect, const CS
     float dx = std::max(std::abs(cxAbs - rect.x), std::abs(cxAbs - (rect.x + rect.w)));
     float dy = std::max(std::abs(cyAbs - rect.y), std::abs(cyAbs - (rect.y + rect.h)));
 
-    // Simulate ellipse by scaling: use unit circle + scale transform
     float rx = dx > 0.f ? dx : 1.f;
     float ry = dy > 0.f ? dy : 1.f;
+
+    // For repeating radial gradients with pixel stops, scale the unit circle to the period
+    // so Cairo Repeat tiles correctly (one period = r=1 in unit space).
+    float lineLen = std::max(rx, ry);
+    if(isRepeating) {
+        float period = gradientPeriod(gradient.colorStops());
+        if(period > 0.f) { rx = period; ry = period; lineLen = period; }
+    }
 
     RadialGradientValues values;
     values.fx = 0.f; values.fy = 0.f;
     values.cx = 0.f; values.cy = 0.f;
     values.r  = 1.f;
 
-    // Transform: scale unit circle to ellipse (rx, ry) centred at (cxAbs, cyAbs)
     Transform gradientTransform(rx, 0.f, 0.f, ry, cxAbs, cyAbs);
-
-    auto stops = resolveGradientStops(gradient.colorStops());
-    bool isRepeating = (gradient.gradientType() == CSSGradientValue::GradientType::RepeatingRadial);
+    auto stops = resolveGradientStops(gradient.colorStops(), lineLen);
     ctx.setRadialGradient(values, stops, gradientTransform, isRepeating ? SpreadMethod::Repeat : SpreadMethod::Pad, 1.f);
+}
+
+static RoundedRect computeBackgroundClipRect(BackgroundBox clipBox, const RoundedRect& borderRRect,
+    float borderTop, float borderRight, float borderBottom, float borderLeft,
+    float paddingTop, float paddingRight, float paddingBottom, float paddingLeft,
+    bool includeLeftEdge, bool includeRightEdge)
+{
+    if(clipBox == BackgroundBox::BorderBox)
+        return borderRRect;
+    auto topW = borderTop, rightW = borderRight, bottomW = borderBottom, leftW = borderLeft;
+    if(clipBox == BackgroundBox::ContentBox) {
+        topW += paddingTop; rightW += paddingRight;
+        bottomW += paddingBottom; leftW += paddingLeft;
+    }
+    if(!includeLeftEdge) leftW = 0.f;
+    if(!includeRightEdge) rightW = 0.f;
+    auto r = borderRRect;
+    r.shrink(topW, rightW, bottomW, leftW);
+    return r;
 }
 
 void BoxModel::paintBackgroundStyle(const PaintInfo& info, const Rect& borderRect, const BoxStyle* backgroundStyle, bool includeLeftEdge, bool includeRightEdge) const
 {
     auto backgroundColor = backgroundStyle->backgroundColor();
-    auto backgroundImage = backgroundStyle->backgroundImage();
-    auto backgroundGradient = backgroundStyle->backgroundGradient();
-    if(backgroundImage == nullptr && backgroundGradient == nullptr && !backgroundColor.alpha())
-        return;
-    auto clipRect = style()->getBorderRoundedRect(borderRect, includeLeftEdge, includeRightEdge);
-    auto backgroundClip = backgroundStyle->backgroundClip();
-    if(backgroundClip == BackgroundBox::PaddingBox || backgroundClip == BackgroundBox::ContentBox) {
-        auto topWidth = borderTop();
-        auto rightWidth = borderRight();
-        auto bottomWidth = borderBottom();
-        auto leftWidth = borderLeft();
-        if(backgroundClip == BackgroundBox::ContentBox) {
-            topWidth += paddingTop();
-            rightWidth += paddingRight();
-            bottomWidth += paddingBottom();
-            leftWidth += paddingLeft();
-        }
+    auto layerCount = backgroundStyle->backgroundLayerCount();
 
-        if(!includeLeftEdge)
-            leftWidth = 0.f;
-        if(!includeRightEdge)
-            rightWidth = 0.f;
-        clipRect.shrink(topWidth, rightWidth, bottomWidth, leftWidth);
-    }
-
-    if(!clipRect.rect().intersects(info.rect()))
-        return;
-    auto clipping = backgroundClip == BackgroundBox::PaddingBox || backgroundClip == BackgroundBox::ContentBox || clipRect.isRounded();
-    if(clipping) {
-        info->save();
-        info->clipRoundedRect(clipRect);
-    }
-
-    info->setColor(backgroundColor);
-    info->fillRect(borderRect);
-    if(backgroundGradient) {
-        Rect gradientArea(borderRect);
-        auto backgroundOrigin = backgroundStyle->backgroundOrigin();
-        if(backgroundOrigin == BackgroundBox::PaddingBox || backgroundOrigin == BackgroundBox::ContentBox) {
-            auto topWidth = borderTop();
-            auto rightWidth = borderRight();
-            auto bottomWidth = borderBottom();
-            auto leftWidth = borderLeft();
-            if(backgroundOrigin == BackgroundBox::ContentBox) {
-                topWidth += paddingTop();
-                rightWidth += paddingRight();
-                bottomWidth += paddingBottom();
-                leftWidth += paddingLeft();
-            }
-            if(!includeLeftEdge) leftWidth = 0.f;
-            if(!includeRightEdge) rightWidth = 0.f;
-            gradientArea.shrink(topWidth, rightWidth, bottomWidth, leftWidth);
-        }
-        bool isLinear = (backgroundGradient->gradientType() == CSSGradientValue::GradientType::Linear
-            || backgroundGradient->gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
-        if(isLinear)
-            paintLinearGradient(*info, gradientArea, *backgroundGradient);
-        else
-            paintRadialGradient(*info, gradientArea, *backgroundGradient);
-        info->fillRect(gradientArea);
-    }
-    if(backgroundImage) {
-        Rect positioningArea(0, 0, borderRect.w, borderRect.h);
-        auto backgroundOrigin = backgroundStyle->backgroundOrigin();
-        if(backgroundOrigin == BackgroundBox::PaddingBox || backgroundOrigin == BackgroundBox::ContentBox) {
-            auto topWidth = borderTop();
-            auto rightWidth = borderRight();
-            auto bottomWidth = borderBottom();
-            auto leftWidth = borderLeft();
-            if(backgroundOrigin == BackgroundBox::ContentBox) {
-                topWidth += paddingTop();
-                rightWidth += paddingRight();
-                bottomWidth += paddingBottom();
-                leftWidth += paddingLeft();
-            }
-
-            positioningArea.shrink(topWidth, rightWidth, bottomWidth, leftWidth);
-        }
-
-        Rect tileRect;
-        auto intrinsicSize = computeBackgroundImageIntrinsicSize(backgroundImage, positioningArea.size());
-        auto backgroundSize = backgroundStyle->backgroundSize();
-        switch(backgroundSize.type()) {
-        case BackgroundSize::Type::Contain:
-        case BackgroundSize::Type::Cover: {
-            auto xScale = positioningArea.w / intrinsicSize.w;
-            auto yScale = positioningArea.h / intrinsicSize.h;
-            auto scale = backgroundSize.type() == BackgroundSize::Type::Contain ? std::min(xScale, yScale) : std::max(xScale, yScale);
-            tileRect.w = intrinsicSize.w * scale;
-            tileRect.h = intrinsicSize.h * scale;
+    bool hasImages = false;
+    for(size_t i = 0; i < layerCount; i++) {
+        if(backgroundStyle->backgroundImageAt(i) || backgroundStyle->backgroundGradientAt(i)) {
+            hasImages = true;
             break;
         }
-
-        case BackgroundSize::Type::Length:
-            const auto& widthLength = backgroundSize.width();
-            const auto& heightLength = backgroundSize.height();
-            if(widthLength.isFixed())
-                tileRect.w = widthLength.value();
-            else if(widthLength.isPercent())
-                tileRect.w = widthLength.calc(positioningArea.w);
-            else {
-                tileRect.w = positioningArea.w;
-            }
-
-            if(heightLength.isFixed())
-                tileRect.h = heightLength.value();
-            else if(heightLength.isPercent())
-                tileRect.h = heightLength.calc(positioningArea.h);
-            else {
-                tileRect.h = positioningArea.h;
-            }
-
-            if(widthLength.isAuto() && !heightLength.isAuto()) {
-                tileRect.w = intrinsicSize.w * tileRect.h / intrinsicSize.h;
-            } else if(!widthLength.isAuto() && heightLength.isAuto()) {
-                tileRect.h = intrinsicSize.h * tileRect.w / intrinsicSize.w;
-            } else if(widthLength.isAuto() && heightLength.isAuto()) {
-                tileRect.w = intrinsicSize.w;
-                tileRect.h = intrinsicSize.h;
-            }
-        }
-
-        auto backgroundPosition = backgroundStyle->backgroundPosition();
-        const Point positionOffset = {
-            backgroundPosition.x().calcMin(positioningArea.w - tileRect.w),
-            backgroundPosition.y().calcMin(positioningArea.h - tileRect.h)
-        };
-
-        Rect destRect(borderRect);
-        auto backgroundRepeat = backgroundStyle->backgroundRepeat();
-        if(backgroundRepeat == BackgroundRepeat::Repeat || backgroundRepeat == BackgroundRepeat::RepeatX) {
-            tileRect.x = tileRect.w - std::fmod(positionOffset.x + positioningArea.x, tileRect.w);
-        } else {
-            destRect.x += std::max(0.f, positionOffset.x + positioningArea.x);
-            tileRect.x = -std::min(0.f, positionOffset.x + positioningArea.x);
-            destRect.w = tileRect.w - tileRect.x;
-        }
-
-        if(backgroundRepeat == BackgroundRepeat::Repeat || backgroundRepeat == BackgroundRepeat::RepeatY) {
-            tileRect.y = tileRect.h - std::fmod(positionOffset.y + positioningArea.y, tileRect.h);
-        } else {
-            destRect.y += std::max(0.f, positionOffset.y + positioningArea.y);
-            tileRect.y = -std::min(0.f, positionOffset.y + positioningArea.y);
-            destRect.h = tileRect.h - tileRect.y;
-        }
-
-        destRect.intersect(borderRect);
-        if(destRect.intersects(info.rect())) {
-            backgroundImage->setContainerSize(tileRect.size());
-            backgroundImage->drawTiled(*info, destRect, tileRect);
-        }
     }
+    if(!hasImages && !backgroundColor.alpha())
+        return;
 
-    if(clipping) {
-        info->restore();
+    auto borderRRect = style()->getBorderRoundedRect(borderRect, includeLeftEdge, includeRightEdge);
+    auto bTop = borderTop(), bRight = borderRight(), bBottom = borderBottom(), bLeft = borderLeft();
+    auto pTop = paddingTop(), pRight = paddingRight(), pBottom = paddingBottom(), pLeft = paddingLeft();
+
+    // Paint background color clipped to last layer's background-clip
+    auto colorClipBox = backgroundStyle->backgroundClipAt(layerCount - 1);
+    auto colorClipRect = computeBackgroundClipRect(colorClipBox, borderRRect,
+        bTop, bRight, bBottom, bLeft, pTop, pRight, pBottom, pLeft, includeLeftEdge, includeRightEdge);
+    if(!colorClipRect.rect().intersects(info.rect()))
+        return;
+
+    bool colorClipping = colorClipBox != BackgroundBox::BorderBox || borderRRect.isRounded();
+    if(colorClipping) { info->save(); info->clipRoundedRect(colorClipRect); }
+    info->setColor(backgroundColor);
+    info->fillRect(borderRect);
+    if(colorClipping) info->restore();
+
+    // Paint image layers from last (bottom) to first (top)
+    for(size_t i = layerCount; i > 0; i--) {
+        size_t layerIndex = i - 1;
+        auto backgroundImage    = backgroundStyle->backgroundImageAt(layerIndex);
+        auto backgroundGradient = backgroundStyle->backgroundGradientAt(layerIndex);
+        if(!backgroundImage && !backgroundGradient)
+            continue;
+
+        auto clipBox = backgroundStyle->backgroundClipAt(layerIndex);
+        auto clipRect = computeBackgroundClipRect(clipBox, borderRRect,
+            bTop, bRight, bBottom, bLeft, pTop, pRight, pBottom, pLeft, includeLeftEdge, includeRightEdge);
+        if(!clipRect.rect().intersects(info.rect()))
+            continue;
+
+        bool clipping = clipBox != BackgroundBox::BorderBox || borderRRect.isRounded();
+        if(clipping) { info->save(); info->clipRoundedRect(clipRect); }
+
+        auto originBox = backgroundStyle->backgroundOriginAt(layerIndex);
+        // Compute origin area (relative to borderRect origin)
+        Rect originArea(0, 0, borderRect.w, borderRect.h);
+        {
+            auto topW = bTop, rightW = bRight, bottomW = bBottom, leftW = bLeft;
+            if(originBox == BackgroundBox::ContentBox) {
+                topW += pTop; rightW += pRight; bottomW += pBottom; leftW += pLeft;
+            }
+            if(originBox != BackgroundBox::BorderBox) {
+                if(!includeLeftEdge) leftW = 0.f;
+                if(!includeRightEdge) rightW = 0.f;
+                originArea.shrink(topW, rightW, bottomW, leftW);
+            }
+        }
+
+        if(backgroundGradient) {
+            Rect gradientArea(borderRect.x + originArea.x, borderRect.y + originArea.y, originArea.w, originArea.h);
+            bool isLinear = (backgroundGradient->gradientType() == CSSGradientValue::GradientType::Linear
+                || backgroundGradient->gradientType() == CSSGradientValue::GradientType::RepeatingLinear);
+            if(isLinear)
+                paintLinearGradient(*info, gradientArea, *backgroundGradient);
+            else
+                paintRadialGradient(*info, gradientArea, *backgroundGradient);
+            info->fillRect(gradientArea);
+        } else {
+            Rect tileRect;
+            auto intrinsicSize = computeBackgroundImageIntrinsicSize(backgroundImage, originArea.size());
+            auto bgSize = backgroundStyle->backgroundSizeAt(layerIndex);
+            switch(bgSize.type()) {
+            case BackgroundSize::Type::Contain:
+            case BackgroundSize::Type::Cover: {
+                auto xScale = originArea.w / intrinsicSize.w;
+                auto yScale = originArea.h / intrinsicSize.h;
+                auto scale = bgSize.type() == BackgroundSize::Type::Contain ? std::min(xScale, yScale) : std::max(xScale, yScale);
+                tileRect.w = intrinsicSize.w * scale;
+                tileRect.h = intrinsicSize.h * scale;
+                break;
+            }
+            case BackgroundSize::Type::Length: {
+                const auto& widthLength  = bgSize.width();
+                const auto& heightLength = bgSize.height();
+                tileRect.w = widthLength.isFixed()  ? widthLength.value()  : widthLength.isPercent()  ? widthLength.calc(originArea.w)  : originArea.w;
+                tileRect.h = heightLength.isFixed() ? heightLength.value() : heightLength.isPercent() ? heightLength.calc(originArea.h) : originArea.h;
+                if(widthLength.isAuto() && !heightLength.isAuto())
+                    tileRect.w = intrinsicSize.w * tileRect.h / intrinsicSize.h;
+                else if(!widthLength.isAuto() && heightLength.isAuto())
+                    tileRect.h = intrinsicSize.h * tileRect.w / intrinsicSize.w;
+                else if(widthLength.isAuto() && heightLength.isAuto()) {
+                    tileRect.w = intrinsicSize.w;
+                    tileRect.h = intrinsicSize.h;
+                }
+                break;
+            }
+            }
+
+            auto bgPos = backgroundStyle->backgroundPositionAt(layerIndex);
+            const Point positionOffset = {
+                bgPos.x().calcMin(originArea.w - tileRect.w),
+                bgPos.y().calcMin(originArea.h - tileRect.h)
+            };
+
+            Rect destRect(borderRect);
+            auto bgRepeat = backgroundStyle->backgroundRepeatAt(layerIndex);
+            if(bgRepeat == BackgroundRepeat::Repeat || bgRepeat == BackgroundRepeat::RepeatX)
+                tileRect.x = tileRect.w - std::fmod(positionOffset.x + originArea.x, tileRect.w);
+            else {
+                destRect.x += std::max(0.f, positionOffset.x + originArea.x);
+                tileRect.x = -std::min(0.f, positionOffset.x + originArea.x);
+                destRect.w = tileRect.w - tileRect.x;
+            }
+            if(bgRepeat == BackgroundRepeat::Repeat || bgRepeat == BackgroundRepeat::RepeatY)
+                tileRect.y = tileRect.h - std::fmod(positionOffset.y + originArea.y, tileRect.h);
+            else {
+                destRect.y += std::max(0.f, positionOffset.y + originArea.y);
+                tileRect.y = -std::min(0.f, positionOffset.y + originArea.y);
+                destRect.h = tileRect.h - tileRect.y;
+            }
+
+            destRect.intersect(borderRect);
+            if(destRect.intersects(info.rect())) {
+                backgroundImage->setContainerSize(tileRect.size());
+                backgroundImage->drawTiled(*info, destRect, tileRect);
+            }
+        }
+
+        if(clipping) info->restore();
     }
 }
 

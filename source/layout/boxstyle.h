@@ -512,6 +512,18 @@ private:
     Length m_bottom;
 };
 
+class AspectRatio {
+public:
+    AspectRatio() = default;
+    explicit AspectRatio(float ratio) : m_auto(false), m_ratio(ratio) {}
+    bool isAuto() const { return m_auto; }
+    float ratio() const { return m_ratio; }
+
+private:
+    bool m_auto = true;
+    float m_ratio = 1.f;
+};
+
 class BackgroundSize {
 public:
     enum class Type {
@@ -795,6 +807,8 @@ public:
     ListStylePosition listStylePosition() const { return m_listStylePosition; }
     RefPtr<Image> listStyleImage() const;
 
+    AspectRatio aspectRatio() const;
+
     RefPtr<Image> backgroundImage() const;
     const CSSGradientValue* backgroundGradient() const;
     Color backgroundColor() const;
@@ -804,6 +818,16 @@ public:
     BackgroundAttachment backgroundAttachment() const { return m_backgroundAttachment; }
     BackgroundSize backgroundSize() const;
     LengthPoint backgroundPosition() const;
+
+    size_t backgroundLayerCount() const;
+    RefPtr<Image> backgroundImageAt(size_t index) const;
+    const CSSGradientValue* backgroundGradientAt(size_t index) const;
+    BackgroundRepeat backgroundRepeatAt(size_t index) const;
+    BackgroundBox backgroundOriginAt(size_t index) const;
+    BackgroundBox backgroundClipAt(size_t index) const;
+    BackgroundAttachment backgroundAttachmentAt(size_t index) const;
+    BackgroundSize backgroundSizeAt(size_t index) const;
+    LengthPoint backgroundPositionAt(size_t index) const;
 
     ObjectFit objectFit() const { return m_objectFit; }
     LengthPoint objectPosition() const;

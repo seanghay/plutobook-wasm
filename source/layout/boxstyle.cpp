@@ -493,6 +493,108 @@ LengthPoint BoxStyle::backgroundPosition() const
     return convertPositionCoordinate(*value);
 }
 
+AspectRatio BoxStyle::aspectRatio() const
+{
+    auto value = get(CSSPropertyID::AspectRatio);
+    if(value == nullptr || (is<CSSIdentValue>(*value) && to<CSSIdentValue>(*value).value() == CSSValueID::Auto))
+        return AspectRatio();
+    if(is<CSSPairValue>(*value)) {
+        const auto& pair = to<CSSPairValue>(*value);
+        float w = convertNumber(*pair.first());
+        float h = convertNumber(*pair.second());
+        if(h > 0.f)
+            return AspectRatio(w / h);
+    }
+    return AspectRatio();
+}
+
+static const CSSValue* listItemAt(const CSSValue* value, size_t index)
+{
+    if(value == nullptr)
+        return nullptr;
+    if(is<CSSListValue>(*value)) {
+        const auto& list = to<CSSListValue>(*value);
+        return list.at(index % list.size()).get();
+    }
+    return value;
+}
+
+size_t BoxStyle::backgroundLayerCount() const
+{
+    auto value = get(CSSPropertyID::BackgroundImage);
+    if(value && is<CSSListValue>(*value))
+        return to<CSSListValue>(*value).size();
+    return 1;
+}
+
+RefPtr<Image> BoxStyle::backgroundImageAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundImage), index);
+    if(item == nullptr || is<CSSGradientValue>(*item))
+        return nullptr;
+    return convertImageOrNone(*item);
+}
+
+const CSSGradientValue* BoxStyle::backgroundGradientAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundImage), index);
+    if(item && is<CSSGradientValue>(*item))
+        return &to<CSSGradientValue>(*item);
+    return nullptr;
+}
+
+BackgroundRepeat BoxStyle::backgroundRepeatAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundRepeat), index);
+    if(item) return convertBackgroundRepeat(*item);
+    return m_backgroundRepeat;
+}
+
+BackgroundBox BoxStyle::backgroundOriginAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundOrigin), index);
+    if(item) return convertBackgroundBox(*item);
+    return m_backgroundOrigin;
+}
+
+BackgroundBox BoxStyle::backgroundClipAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundClip), index);
+    if(item) return convertBackgroundBox(*item);
+    return m_backgroundClip;
+}
+
+BackgroundAttachment BoxStyle::backgroundAttachmentAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundAttachment), index);
+    if(item) return convertBackgroundAttachment(*item);
+    return m_backgroundAttachment;
+}
+
+BackgroundSize BoxStyle::backgroundSizeAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundSize), index);
+    if(item == nullptr)
+        return BackgroundSize();
+    if(is<CSSIdentValue>(*item)) {
+        switch(to<CSSIdentValue>(*item).value()) {
+        case CSSValueID::Contain: return BackgroundSize(BackgroundSize::Type::Contain);
+        case CSSValueID::Cover:   return BackgroundSize(BackgroundSize::Type::Cover);
+        default: break;
+        }
+    }
+    const auto& pair = to<CSSPairValue>(*item);
+    return BackgroundSize(convertLengthOrPercentOrAuto(*pair.first()), convertLengthOrPercentOrAuto(*pair.second()));
+}
+
+LengthPoint BoxStyle::backgroundPositionAt(size_t index) const
+{
+    auto item = listItemAt(get(CSSPropertyID::BackgroundPosition), index);
+    if(item == nullptr)
+        return LengthPoint(Length::ZeroFixed);
+    return convertPositionCoordinate(*item);
+}
+
 LengthPoint BoxStyle::objectPosition() const
 {
     auto value = get(CSSPropertyID::ObjectPosition);
@@ -1192,16 +1294,32 @@ bool BoxStyle::setValue(CSSPropertyID id, const CSSValue& value)
         m_listStylePosition = convertListStylePosition(value);
         break;
     case CSSPropertyID::BackgroundRepeat:
-        m_backgroundRepeat = convertBackgroundRepeat(value);
+        if(is<CSSListValue>(value)) {
+            for(const auto& item : to<CSSListValue>(value))
+                if(item) { m_backgroundRepeat = convertBackgroundRepeat(*item); break; }
+        } else
+            m_backgroundRepeat = convertBackgroundRepeat(value);
         break;
     case CSSPropertyID::BackgroundOrigin:
-        m_backgroundOrigin = convertBackgroundBox(value);
+        if(is<CSSListValue>(value)) {
+            for(const auto& item : to<CSSListValue>(value))
+                if(item) { m_backgroundOrigin = convertBackgroundBox(*item); break; }
+        } else
+            m_backgroundOrigin = convertBackgroundBox(value);
         break;
     case CSSPropertyID::BackgroundClip:
-        m_backgroundClip = convertBackgroundBox(value);
+        if(is<CSSListValue>(value)) {
+            for(const auto& item : to<CSSListValue>(value))
+                if(item) { m_backgroundClip = convertBackgroundBox(*item); break; }
+        } else
+            m_backgroundClip = convertBackgroundBox(value);
         break;
     case CSSPropertyID::BackgroundAttachment:
-        m_backgroundAttachment = convertBackgroundAttachment(value);
+        if(is<CSSListValue>(value)) {
+            for(const auto& item : to<CSSListValue>(value))
+                if(item) { m_backgroundAttachment = convertBackgroundAttachment(*item); break; }
+        } else
+            m_backgroundAttachment = convertBackgroundAttachment(value);
         break;
     case CSSPropertyID::ObjectFit:
         m_objectFit = convertObjectFit(value);

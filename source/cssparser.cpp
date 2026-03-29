@@ -1186,6 +1186,7 @@ static CSSPropertyID csspropertyid(std::string_view name)
         {"align-items", CSSPropertyID::AlignItems},
         {"align-self", CSSPropertyID::AlignSelf},
         {"alignment-baseline", CSSPropertyID::AlignmentBaseline},
+        {"aspect-ratio", CSSPropertyID::AspectRatio},
         {"background", CSSPropertyID::Background},
         {"background-attachment", CSSPropertyID::BackgroundAttachment},
         {"background-clip", CSSPropertyID::BackgroundClip},
@@ -2553,13 +2554,18 @@ RefPtr<CSSValue> CSSParser::consumeGradient(CSSTokenStream& input, CSSGradientVa
         else
             color = Color(0, 0, 0, 255); // fallback for currentColor / named
 
-        float offset = -1.f; // auto
+        float offset = -1.f;
+        bool isAbsolute = false;
         if(block->type() == CSSToken::Type::Percentage) {
             offset = std::clamp(block->number() / 100.f, 0.f, 1.f);
             block.consumeIncludingWhitespace();
+        } else if(block->type() == CSSToken::Type::Dimension) {
+            offset = block->number(); // store raw px value
+            isAbsolute = true;
+            block.consumeIncludingWhitespace();
         }
 
-        stops.push_back({offset, color});
+        stops.push_back(CSSGradientValue::ColorStop{offset, isAbsolute, color});
     }
 
     if(stops.size() < 2)
@@ -4076,6 +4082,8 @@ RefPtr<CSSValue> CSSParser::consumeLonghand(CSSTokenStream& input, CSSPropertyID
     case CSSPropertyID::MarkerStart:
     case CSSPropertyID::Mask:
         return consumeLocalUrlOrNone(input);
+    case CSSPropertyID::AspectRatio:
+        return consumeAspectRatio(input);
     case CSSPropertyID::ListStyleImage:
     case CSSPropertyID::BackgroundImage:
         return consumeImageOrNone(input);
@@ -4763,53 +4771,89 @@ bool CSSParser::consumeFlex(CSSTokenStream& input, CSSPropertyList& properties, 
     return true;
 }
 
+RefPtr<CSSValue> CSSParser::consumeAspectRatio(CSSTokenStream& input)
+{
+    if(consumeIdentIncludingWhitespace(input, "auto", 4))
+        return CSSIdentValue::create(CSSValueID::Auto);
+    auto width = consumeNumber(input, false);
+    if(width == nullptr)
+        return nullptr;
+    if(!input.empty() && input->type() == CSSToken::Type::Delim && input->delim() == '/') {
+        input.consumeIncludingWhitespace();
+        auto height = consumeNumber(input, false);
+        if(height == nullptr)
+            return nullptr;
+        return CSSPairValue::create(m_heap, std::move(width), std::move(height));
+    }
+    return CSSPairValue::create(m_heap, std::move(width), CSSNumberValue::create(m_heap, 1.f));
+}
+
 bool CSSParser::consumeBackground(CSSTokenStream& input, CSSPropertyList& properties, bool important)
 {
+    struct Layer {
+        RefPtr<CSSValue> image;
+        RefPtr<CSSValue> repeat;
+        RefPtr<CSSValue> attachment;
+        RefPtr<CSSValue> origin;
+        RefPtr<CSSValue> clip;
+        RefPtr<CSSValue> position;
+        RefPtr<CSSValue> size;
+    };
+    std::vector<Layer> layers;
     RefPtr<CSSValue> color;
-    RefPtr<CSSValue> image;
-    RefPtr<CSSValue> repeat;
-    RefPtr<CSSValue> attachment;
-    RefPtr<CSSValue> origin;
-    RefPtr<CSSValue> clip;
-    RefPtr<CSSValue> position;
-    RefPtr<CSSValue> size;
-    while(!input.empty()) {
-        if(position == nullptr && (position = consumePositionCoordinate(input))) {
-            if(input->type() == CSSToken::Type::Delim && input->delim() == '/') {
-                input.consumeIncludingWhitespace();
-                if(size == nullptr && (size = consumeBackgroundSize(input)))
-                    continue;
-                return false;
+    while(true) {
+        Layer layer;
+        while(!input.empty()) {
+            if(input->type() == CSSToken::Type::Comma)
+                break;
+            if(layer.position == nullptr && (layer.position = consumePositionCoordinate(input))) {
+                if(!input.empty() && input->type() == CSSToken::Type::Delim && input->delim() == '/') {
+                    input.consumeIncludingWhitespace();
+                    if(layer.size == nullptr && (layer.size = consumeBackgroundSize(input)))
+                        continue;
+                    return false;
+                }
+                continue;
             }
-
-            continue;
+            if(layer.image == nullptr && (layer.image = consumeImage(input))) continue;
+            if(layer.repeat == nullptr && (layer.repeat = consumeLonghand(input, CSSPropertyID::BackgroundRepeat))) continue;
+            if(layer.attachment == nullptr && (layer.attachment = consumeLonghand(input, CSSPropertyID::BackgroundAttachment))) continue;
+            if(layer.origin == nullptr && (layer.origin = consumeLonghand(input, CSSPropertyID::BackgroundOrigin))) continue;
+            if(layer.clip == nullptr && (layer.clip = consumeLonghand(input, CSSPropertyID::BackgroundClip))) continue;
+            if(color == nullptr && (color = consumeColor(input))) continue;
+            return false;
         }
-
-        if(image == nullptr && (image = consumeImage(input)))
-            continue;
-        if(repeat == nullptr && (repeat = consumeLonghand(input, CSSPropertyID::BackgroundRepeat)))
-            continue;
-        if(attachment == nullptr && (attachment = consumeLonghand(input, CSSPropertyID::BackgroundAttachment)))
-            continue;
-        if(origin == nullptr && (origin = consumeLonghand(input, CSSPropertyID::BackgroundOrigin)))
-            continue;
-        if(clip == nullptr && (clip = consumeLonghand(input, CSSPropertyID::BackgroundClip)))
-            continue;
-        if(color == nullptr && (color = consumeColor(input)))
-            continue;
-        return false;
+        if(layer.clip == nullptr)
+            layer.clip = layer.origin;
+        layers.push_back(std::move(layer));
+        if(input.empty())
+            break;
+        input.consumeCommaIncludingWhitespace();
     }
 
-    if(clip == nullptr)
-        clip = origin;
+    auto makeList = [&](auto getter) -> RefPtr<CSSValue> {
+        if(layers.size() == 1)
+            return getter(layers[0]);
+        CSSValueList list(m_heap);
+        bool hasAny = false;
+        for(const auto& l : layers) {
+            auto v = getter(l);
+            if(v) hasAny = true;
+            list.push_back(std::move(v));
+        }
+        if(!hasAny)
+            return nullptr;
+        return CSSListValue::create(m_heap, std::move(list));
+    };
+
     addProperty(properties, CSSPropertyID::BackgroundColor, important, std::move(color));
-    addProperty(properties, CSSPropertyID::BackgroundImage, important, std::move(image));
-    addProperty(properties, CSSPropertyID::BackgroundRepeat, important, std::move(repeat));
-    addProperty(properties, CSSPropertyID::BackgroundAttachment, important, std::move(attachment));
-    addProperty(properties, CSSPropertyID::BackgroundOrigin, important, std::move(origin));
-    addProperty(properties, CSSPropertyID::BackgroundClip, important, std::move(clip));
-    addProperty(properties, CSSPropertyID::BackgroundPosition, important, std::move(position));
-    addProperty(properties, CSSPropertyID::BackgroundSize, important, std::move(size));
+    addProperty(properties, CSSPropertyID::BackgroundImage, important, makeList([](const Layer& l){ return l.image; }));
+    addProperty(properties, CSSPropertyID::BackgroundRepeat, important, makeList([](const Layer& l){ return l.repeat; }));
+    addProperty(properties, CSSPropertyID::BackgroundAttachment, important, makeList([](const Layer& l){ return l.attachment; }));
+    addProperty(properties, CSSPropertyID::BackgroundOrigin, important, makeList([](const Layer& l){ return l.origin; }));
+    addProperty(properties, CSSPropertyID::BackgroundClip, important, makeList([](const Layer& l){ return l.clip; }));
+    addProperty(properties, CSSPropertyID::BackgroundPosition, important, makeList([](const Layer& l){ return l.position; }));
+    addProperty(properties, CSSPropertyID::BackgroundSize, important, makeList([](const Layer& l){ return l.size; }));
     return true;
 }
 

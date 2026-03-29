@@ -491,6 +491,14 @@ void BlockBox::computeHeight(float& y, float& height, float& marginTop, float& m
         return;
     if(auto computedHeight = computeHeightUsing(style()->height()))
         height = adjustBorderBoxHeight(computedHeight.value());
+    else {
+        auto ar = style()->aspectRatio();
+        if(!ar.isAuto() && style()->height().isAuto()) {
+            auto contentWidth = width() - borderAndPaddingWidth();
+            auto contentHeight = contentWidth / ar.ratio();
+            height = adjustBorderBoxHeight(contentHeight);
+        }
+    }
     height = constrainBorderBoxHeight(height);
 }
 
